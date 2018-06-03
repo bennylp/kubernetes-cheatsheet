@@ -2,6 +2,24 @@
 
 This cheat sheet is written while reading "*Kubernetes: Up and Running* book by Kelsey Hightower, Brendan Burns, and Joe Beda (O’Reilly). This is a great book for those who are starting to learn Kubernetes.
 
+#### Table of Contents
+
+* [Kubernetes Cheat Sheet](#kubernetes-cheat-sheet)
+* [Creating and Running Docker Containers](#creating-and-running-docker-containers)
+* [Using Minikube](#using-minikube)
+* [Working with The Cluster](#working-with-the-cluster)
+* [Common kubectl Commands](#common-kubectl-commands)
+* [Working with Pods](#working-with-pods)
+* [Labels and Annotations](#labels-and-annotations)
+* [Service](#service)
+* [ReplicaSets](#replicasets)
+* [Daemon Set](#daemon-set)
+* [Jobs](#jobs)
+* [ConfigMaps](#configmaps)
+* [Secrets](#secrets)
+* [Deployment](#deployment)
+
+
 ## Creating and Running Docker Containers
 
 #### Sample App
@@ -744,6 +762,18 @@ Because the cluster IP address of a service is virtual, it is stable and you can
 No idea what this is..
 
 
+#### Service without Selector
+
+```yaml
+kind: Service
+apiVersion: v1
+metadata:
+  name: external-database
+spec:
+  type: ExternalName
+  externalName: "database.company.com"
+```
+
 ## ReplicaSets
 
 The doc says in many cases it is recommended to create a Deployment instead of ReplicaSet.
@@ -906,6 +936,14 @@ Add `--cascade=false` to prevent pod deletion.
 
 Jobs are short-lived pods to execute some tasks.
 
+### Running from Command Line
+
+Running a one shot job interactively (the `-i` option):
+
+```bash
+$ kubectl run -i example-job --image=.. --restart=OnFailure -- arg1 arg2 ..
+```
+
 #### Manifest
 
 ```yaml
@@ -929,11 +967,257 @@ spec:
       restartPolicy: OnFailure
 ```
 
-## Config Maps and Secrets
+#### Getting Job Info
 
-TBD.
+```bash
+$ kubectl describe jobs example-job
+```
+
+#### Listing Pods for Running/Have Run Some Jobs
+
+```bash
+$ kubectl get pod -l job-name=example-job -a
+```
+
+#### Cleaning Jobs
+
+```bash
+$ kubectl delete jobs example-job
+```
+
+## ConfigMaps
+
+#### Creating from Command Line
+
+Suppose we have a config file `my-config.txt` with the following content:
+
+```
+# This is a sample config file that I might use to configure an application
+parameter1 = value1
+parameter2 = value2
+```
+
+Here's to create a ConfigMap:
+
+```bash
+$ kubectl create configmap my-config \
+   --from-file=my-config.txt \
+   --from-literal=extra-param=extra-value \
+   --from-literal=another-param=another-value
+```
+
+#### Manifest
+
+```bash
+$ kubectl get configmaps my-config -o yaml
+
+apiVersion: v1
+data:
+  another-param: another-value
+  extra-param: extra-value
+  my-config.txt: |
+    # This is a sample config file that I might use to configure an application
+    parameter1 = value1
+    parameter2 = value2
+kind: ConfigMap
+metadata:
+  creationTimestamp: 2018-06-03T01:13:31Z
+  name: my-config
+  namespace: default
+  resourceVersion: "211863"
+  selfLink: /api/v1/namespaces/default/configmaps/my-config
+  uid: 5458f599-66cb-11e8-b3a2-08002738b79a
+```
+
+#### Listing
+
+```bash
+$ kubectl get configmaps
+```
+
+#### Using ConfigMap
+
+Three ways:
+* mount as file system
+* environment variable
+* command-line argument
+
+The first two are shown in example below:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-example
+spec:
+  containers:
+    - name: test-container
+      image: gcr.io/kuar-demo/kuard-amd64:1
+      imagePullPolicy: Always
+      command:
+        - "/kuard"
+        - "$(EXTRA_PARAM)"
+      env:
+        - name: ANOTHER_PARAM
+          valueFrom:
+            configMapKeyRef:
+              name: my-config
+              key: another-param
+        - name: EXTRA_PARAM
+          valueFrom:
+            configMapKeyRef:
+              name: my-config
+              key: extra-param
+      volumeMounts:
+        - name: config-volume
+          mountPath: /config
+volumes:
+  - name: config-volume
+    configMap:
+      name: my-config
+restartPolicy: Never
+```
+
+#### Updating
+
+If you have the YAML:
+
+```bash
+$ kubectl replace -f <filename>
+```
+
+If previously applied using `kubectl apply`:
+
+```bash
+$ kubectl apply -f <filename>
+```
+
+#### Updating Interactively
+
+```bash
+$ kubectl edit configmap my-config
+```
+
+## Secrets
+
+#### Creating
+
+Putting `example.crt` and `example.key` in the secret:
+
+```bash
+$ kubectl create secret generic example-secret --from-file=example.crt --from-file=example.key
+```
+
+#### Updating
+
+```bash
+$ kubectl create secret generic example-secret \
+  --from-file=example.crt --from-file=example.key \
+  --dry-run -o yaml | \
+  kubectl replace -f -
+```
+
+#### Listing
+
+```bash
+$ kubectl get secrets
+```
+
+#### Getting the Info
+
+```
+$ kubectl describe secrets example-secret
+
+Name:        example-tls
+Namespace:   default
+Labels:      <none>
+Annotations: <none>
+
+Type:        Opaque
+
+Data
+====
+example.crt: 1679 bytes
+example.key: 1050 bytes
+```
+
+#### Using Secret
+
+Mount as volume:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: example-pod
+spec:
+  containers:
+    - name: example-pod
+      image: ...
+      imagePullPolicy: Always
+      volumeMounts:
+      - name: tls-certs
+        mountPath: "/tls"
+        readOnly: true
+volumes:
+  - name: tls-certs
+    secret:
+      secretName: example-secret
+```
+
+#### Saving Private Docker Registry Credential
+
+```bash
+$ kubectl create secret docker-registry my-docker-credential \
+  --docker-username=<username> \
+  --docker-password=<password> \
+  --docker-email=<email-address>
+```
+
+### Using Private Docker Registry Credential
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: example.pod
+spec:
+  containers:
+    - name: example-pod
+      image: docker...
+      imagePullPolicy: Always
+  imagePullSecrets:
+    - name: my-image-pull-secret
+
+```
 
 ## Deployment
+
+#### Creating from Command Line
+
+```bash
+$ kubectl run nginx --image=nginx:1.7.12
+```
+
+#### Getting Info
+
+```bash
+$ kubectl get deployments nginx
+```
+
+#### Getting the ReplicaSet
+
+Getting the ReplicaSet that the deployment manages:
+
+```bash
+$ kubectl get replicasets --selector=run=nginx
+```
+
+#### Scaling
+
+```bash
+$ kubectl scale deployments nginx --replicas=2
+```
 
 #### Manifest
 
@@ -967,3 +1251,60 @@ spec:
         # Run this image
         image: nginx:1.10
 ```
+
+#### Getting the Info
+
+Use `kubectl describe`.
+
+#### Updating
+
+Change the YAML and use `kubectl apply -f <filename>`.
+
+You'd better change the annotation to indicate the reason of the update.
+
+#### Rollout Status
+
+```bash
+$ kubectl rollout status deployments nginx
+```
+
+#### Pausing and Resuming a Rollout
+
+You can pause the rollout if something weird happens:
+
+```bash
+$ kubectl rollout pause deployments nginx
+```
+
+And to resume it:
+
+```bash
+$ kubectl rollout resume deployments nginx
+```
+
+#### Rollout History
+
+```bash
+$ kubectl rollout history deployment nginx
+```
+
+Detailed info for a particular revision:
+
+```bash
+$ kubectl rollout history deployment nginx --revision=2
+```
+
+#### Rollback Deployment
+
+```bash
+$ kubectl rollout undo deployments nginx
+```
+
+But this is probably bad idea. Better to change the YAML and apply it.
+
+#### Controlling Rollout
+
+Use:
+* `maxUnavailable`
+* `minReadySeconds`
+* `progressDeadlineSeconds`
